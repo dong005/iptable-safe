@@ -1,0 +1,6 @@
+iptables-safe
+*.db
+*.log
+tmp/
+dist/
+.env

@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>管理后台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 {
+            color: #333;
+            font-size: 24px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 20px;
+            border-bottom: 2px solid #f093fb;
+            padding-bottom: 10px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #333;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: transform 0.2s;
+        }
+        .btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+        }
+        .btn-danger {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-success {
+            background: #28a745;
+            color: white;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        input[type="text"]:focus,
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #f5576c;
+        }
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .message {
+            padding: 12px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+            display: none;
+        }
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal.active {
+            display: flex;
+        }
+        .modal-content {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+        }
+        .modal-header {
+            margin-bottom: 20px;
+        }
+        .modal-header h3 {
+            color: #333;
+            font-size: 20px;
+        }
+        .modal-footer {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+            margin-top: 20px;
+        }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛡️ IP白名单管理后台</h1>
+            <button class="btn btn-danger" onclick="logout()">退出登录</button>
+        </div>
+
+        <div class="card">
+            <h2>IP白名单列表</h2>
+            <div id="ipMessage" class="message"></div>
+            <button class="btn btn-primary" onclick="openAddIPModal()" style="margin-bottom: 15px;">添加IP</button>
+            <table id="ipTable">
+                <thead>
+                    <tr>
+                        <th>IP地址</th>
+                        <th>描述</th>
+                        <th>类型</th>
+                        <th>创建时间</th>
+                        <th>过期时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="ipTableBody">
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>密码管理</h2>
+            <div id="passwordMessage" class="message"></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                <div>
+                    <h3 style="margin-bottom: 15px; color: #666;">用户密码</h3>
+                    <div class="form-group">
+                        <label>新密码</label>
+                        <input type="password" id="newUserPassword" placeholder="输入新的用户密码">
+                    </div>
+                    <button class="btn btn-success" onclick="updateUserPassword()">更新用户密码</button>
+                </div>
+                <div>
+                    <h3 style="margin-bottom: 15px; color: #666;">管理员密码</h3>
+                    <div class="form-group">
+                        <label>新密码</label>
+                        <input type="password" id="newAdminPassword" placeholder="输入新的管理员密码">
+                    </div>
+                    <button class="btn btn-success" onclick="updateAdminPassword()">更新管理员密码</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="addIPModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>添加IP白名单</h3>
+            </div>
+            <div class="form-group">
+                <label>IP地址</label>
+                <input type="text" id="newIP" placeholder="例如: 192.168.1.100">
+            </div>
+            <div class="form-group">
+                <label>描述</label>
+                <input type="text" id="newIPDescription" placeholder="例如: 办公室IP">
+            </div>
+            <div class="form-group">
+                <div class="checkbox-group">
+                    <input type="checkbox" id="isPermanent">
+                    <label for="isPermanent" style="margin: 0;">永久白名单</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeAddIPModal()" style="background: #6c757d; color: white;">取消</button>
+                <button class="btn btn-primary" onclick="addIP()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadWhitelistIPs() {
+            try {
+                const response = await fetch('/api/admin/whitelist');
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        window.location.href = '/admin';
+                        return;
+                    }
+                    throw new Error('Failed to load IPs');
+                }
+                const ips = await response.json();
+                displayIPs(ips);
+            } catch (error) {
+                showMessage('ipMessage', 'error', '加载IP列表失败');
+            }
+        }
+
+        function displayIPs(ips) {
+            const tbody = document.getElementById('ipTableBody');
+            tbody.innerHTML = '';
+            
+            if (ips.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="6" style="text-align: center; color: #999;">暂无数据</td></tr>';
+                return;
+            }
+
+            ips.forEach(ip => {
+                const row = document.createElement('tr');
+                const isPermanent = ip.is_permanent;
+                const expiresAt = ip.expires_at ? new Date(ip.expires_at).toLocaleString('zh-CN') : '-';
+                const createdAt = new Date(ip.created_at).toLocaleString('zh-CN');
+                
+                row.innerHTML = `
+                    <td>${ip.ip}</td>
+                    <td>${ip.description || '-'}</td>
+                    <td><span class="badge ${isPermanent ? 'badge-success' : 'badge-warning'}">${isPermanent ? '永久' : '临时'}</span></td>
+                    <td>${createdAt}</td>
+                    <td>${expiresAt}</td>
+                    <td>
+                        <button class="btn btn-danger" onclick="deleteIP(${ip.id})">删除</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        function openAddIPModal() {
+            document.getElementById('addIPModal').classList.add('active');
+        }
+
+        function closeAddIPModal() {
+            document.getElementById('addIPModal').classList.remove('active');
+            document.getElementById('newIP').value = '';
+            document.getElementById('newIPDescription').value = '';
+            document.getElementById('isPermanent').checked = false;
+        }
+
+        async function addIP() {
+            const ip = document.getElementById('newIP').value.trim();
+            const description = document.getElementById('newIPDescription').value.trim();
+            const isPermanent = document.getElementById('isPermanent').checked;
+
+            if (!ip) {
+                alert('请输入IP地址');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/whitelist', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ ip, description, is_permanent: isPermanent }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showMessage('ipMessage', 'success', 'IP添加成功');
+                    closeAddIPModal();
+                    loadWhitelistIPs();
+                } else {
+                    alert(data.error || 'IP添加失败');
+                }
+            } catch (error) {
+                alert('网络错误，请稍后重试');
+            }
+        }
+
+        async function deleteIP(id) {
+            if (!confirm('确定要删除这个IP吗？')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/admin/whitelist/${id}`, {
+                    method: 'DELETE',
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showMessage('ipMessage', 'success', 'IP删除成功');
+                    loadWhitelistIPs();
+                } else {
+                    alert(data.error || 'IP删除失败');
+                }
+            } catch (error) {
+                alert('网络错误，请稍后重试');
+            }
+        }
+
+        async function updateUserPassword() {
+            const newPassword = document.getElementById('newUserPassword').value;
+
+            if (!newPassword) {
+                alert('请输入新密码');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/password/user', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ new_password: newPassword }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showMessage('passwordMessage', 'success', '用户密码更新成功');
+                    document.getElementById('newUserPassword').value = '';
+                } else {
+                    alert(data.error || '密码更新失败');
+                }
+            } catch (error) {
+                alert('网络错误，请稍后重试');
+            }
+        }
+
+        async function updateAdminPassword() {
+            const newPassword = document.getElementById('newAdminPassword').value;
+
+            if (!newPassword) {
+                alert('请输入新密码');
+                return;
+            }
+
+            if (!confirm('确定要修改管理员密码吗？修改后需要重新登录。')) {
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/admin/password/admin', {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ new_password: newPassword }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    alert('管理员密码更新成功，请重新登录');
+                    window.location.href = '/admin';
+                } else {
+                    alert(data.error || '密码更新失败');
+                }
+            } catch (error) {
+                alert('网络错误，请稍后重试');
+            }
+        }
+
+        function logout() {
+            document.cookie = 'admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            window.location.href = '/admin';
+        }
+
+        function showMessage(elementId, type, message) {
+            const messageDiv = document.getElementById(elementId);
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = message;
+            messageDiv.style.display = 'block';
+            setTimeout(() => {
+                messageDiv.style.display = 'none';
+            }, 3000);
+        }
+
+        loadWhitelistIPs();
+    </script>
+</body>
+</html>
