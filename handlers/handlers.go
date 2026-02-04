@@ -7,15 +7,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"golang.org/x/crypto/bcrypt"
 	"iptables-safe/database"
 	"iptables-safe/iptables"
+
+	"github.com/gin-gonic/gin"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	MaxFailedAttempts = 5
-	LockoutDuration   = 15 * time.Minute
+	MaxFailedAttempts     = 5
+	LockoutDuration       = 15 * time.Minute
 	TempWhitelistDuration = 24 * time.Hour
 )
 
@@ -25,6 +26,12 @@ func UserLoginPage(c *gin.Context) {
 
 func UserLogin(c *gin.Context) {
 	clientIP := getClientIP(c)
+
+	// 验证客户端IP
+	if clientIP == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to determine client IP"})
+		return
+	}
 
 	failedAttempts, err := database.GetRecentFailedAttempts(clientIP, LockoutDuration)
 	if err != nil {
@@ -275,6 +282,13 @@ func getClientIP(c *gin.Context) string {
 	if ip == "" {
 		ip = c.ClientIP()
 	}
+
+	// 过滤掉无效IP
+	if ip == "" || ip == "0.0.0.0" || ip == "::1" || strings.HasPrefix(ip, "::") {
+		log.Printf("Warning: Invalid client IP detected: %s", ip)
+		return ""
+	}
+
 	return ip
 }
 

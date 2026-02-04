@@ -138,10 +138,21 @@ func runCommand(args ...string) error {
 }
 
 func isValidIP(ip string) bool {
+	// 拒绝空字符串
+	if ip == "" {
+		return false
+	}
+
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
 		return false
 	}
+
+	// 拒绝 0.0.0.0
+	if ip == "0.0.0.0" {
+		return false
+	}
+
 	for _, part := range parts {
 		if len(part) == 0 || len(part) > 3 {
 			return false
