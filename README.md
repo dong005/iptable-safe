@@ -32,9 +32,14 @@
 
 ## 快速部署（推荐）
 
-### 方式一：使用自动安装脚本
+**三种部署方式对比**：
+- **方式一**：全自动安装（会自动下载Go并编译）- 适合首次部署
+- **方式二**：使用预编译文件（无需Go环境）- 适合快速部署 ⭐
+- **方式三**：源码编译（需要Go环境）- 仅在需要修改代码时使用
 
-从GitHub下载完整部署包并自动安装：
+### 方式一：使用自动安装脚本（全自动）
+
+从GitHub下载完整部署包并自动安装（会自动下载Go 1.15.15并编译）：
 
 ```bash
 # 1. 下载部署包
@@ -61,17 +66,17 @@ chmod +x auto-install.sh
 
 安装完成后访问：`http://your-server-ip:8888`
 
-### 方式二：使用预编译二进制文件
+### 方式二：Git克隆 + 预编译二进制（推荐）
 
-直接使用仓库中的预编译Linux二进制文件：
+直接使用仓库中的预编译Linux二进制文件，无需安装Go：
 
 ```bash
-# 1. 克隆仓库
+# 1. 克隆仓库到安装目录
 cd /opt
-git clone https://github.com/dong005/iptable-safe.git
-cd iptable-safe
+git clone https://github.com/dong005/iptable-safe.git iptables-safe
+cd iptables-safe
 
-# 2. 使用预编译的二进制文件
+# 2. 使用预编译的二进制文件（无需编译）
 chmod +x iptables-safe-linux
 mv iptables-safe-linux iptables-safe
 
@@ -128,21 +133,23 @@ chkconfig iptables-safe on
 service iptables-safe start
 ```
 
-### 方式三：从源码编译
+### 方式三：从源码编译（仅在需要修改代码时使用）
 
-如果需要从源码编译（需要Go环境）：
+如果需要修改源码后重新编译（需要Go 1.15+环境）：
 
 ```bash
 # 1. 克隆仓库
 cd /opt
-git clone https://github.com/dong005/iptable-safe.git
-cd iptable-safe
+git clone https://github.com/dong005/iptable-safe.git iptables-safe
+cd iptables-safe
 
-# 2. 编译（需要Go 1.15+）
+# 2. 编译（需要先安装Go环境）
 go build -o iptables-safe main.go
 
 # 3. 按照方式二的步骤3-4配置服务
 ```
+
+**注意**：大多数情况下使用方式一或方式二即可，无需从源码编译。
 
 ## 手动安装步骤
 
