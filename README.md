@@ -32,6 +32,10 @@
 
 ## 快速部署（推荐）
 
+**🇨🇳 国内服务器用户请注意**：
+- GitHub访问受限，请使用 **Gitee镜像** 或 **手动下载**
+- 推荐使用下方的 **国内专用命令**
+
 **三种部署方式对比**：
 - **方式一**：全自动安装（会自动下载Go并编译）- 适合首次部署
 - **方式二**：使用预编译文件（无需Go环境）- 适合快速部署 ⭐
@@ -66,28 +70,34 @@ chmod +x auto-install.sh
 
 安装完成后访问：`http://your-server-ip:8888`
 
-### 方式二：Git克隆 + 预编译二进制（推荐）
+### 方式二：Git克隆 + 预编译二进制（推荐）⭐
 
 直接使用仓库中的预编译Linux二进制文件，无需安装Go。
 
 **选项A：使用自动化脚本（最简单）**
 
+**🇨🇳 国内服务器（推荐）：**
 ```bash
-# 一键部署
-curl -fsSL https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh | bash
-```
-
-或者手动下载后执行：
-
-```bash
-wget https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh
+# GitHub可以克隆，但raw.githubusercontent.com被墙
+# 方案：先克隆仓库，再执行脚本
+cd /tmp
+git clone https://github.com/dong005/iptable-safe.git
+cd iptable-safe
 chmod +x git-deploy.sh
 ./git-deploy.sh
 ```
 
-自动化脚本会完成：
+**🌍 国外服务器（一键部署）：**
+```bash
+# 直接通过curl执行
+curl -fsSL https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh | bash
+```
+
+自动化脚本会自动尝试多个镜像源：
+- ✅ 优先使用Gitee（国内速度快）
+- ✅ 备用GitHub源
+- ✅ 备用镜像站
 - ✅ 检查并安装Git
-- ✅ 克隆/更新仓库
 - ✅ 使用预编译二进制文件
 - ✅ 配置防火墙规则
 - ✅ 配置init.d服务
@@ -98,7 +108,13 @@ chmod +x git-deploy.sh
 ```bash
 # 1. 克隆仓库到安装目录
 cd /opt
-git clone https://github.com/dong005/iptable-safe.git iptables-safe
+
+# 国内服务器使用Gitee（推荐）
+git clone https://gitee.com/dong005/iptable-safe.git iptables-safe
+
+# 或使用GitHub
+# git clone https://github.com/dong005/iptable-safe.git iptables-safe
+
 cd iptables-safe
 
 # 2. 使用预编译的二进制文件（无需编译）

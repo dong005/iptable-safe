@@ -8,7 +8,10 @@ set -e
 
 INSTALL_DIR="/opt/iptables-safe"
 SERVICE_NAME="iptables-safe"
-REPO_URL="https://github.com/dong005/iptable-safe.git"
+# 支持国内镜像
+REPO_URL_GITHUB="https://github.com/dong005/iptable-safe.git"
+REPO_URL_GITEE="https://gitee.com/dong005/iptable-safe.git"
+REPO_URL_MIRROR="https://hub.fastgit.xyz/dong005/iptable-safe.git"
 LOG_FILE="/var/log/iptables-safe-install.log"
 
 # 颜色输出
@@ -78,16 +81,52 @@ if [ -d "$INSTALL_DIR/.git" ]; then
     echo "更新现有仓库..."
     cd "$INSTALL_DIR"
     git pull origin main || {
-        echo -e "${RED}错误: Git更新失败${NC}"
-        exit 1
+        echo -e "${YELLOW}警告: Git更新失败，尝试重新克隆${NC}"
+        cd /
+        rm -rf "$INSTALL_DIR"
     }
-else
+fi
+
+if [ ! -d "$INSTALL_DIR/.git" ]; then
     echo "克隆仓库..."
     rm -rf "$INSTALL_DIR"
-    git clone "$REPO_URL" "$INSTALL_DIR" || {
-        echo -e "${RED}错误: Git克隆失败${NC}"
+    
+    # 尝试多个镜像源
+    CLONE_SUCCESS=0
+    
+    # 优先尝试Gitee（国内速度快）
+    echo "尝试从Gitee克隆..."
+    if git clone "$REPO_URL_GITEE" "$INSTALL_DIR" 2>/dev/null; then
+        CLONE_SUCCESS=1
+        echo "✓ 从Gitee克隆成功"
+    fi
+    
+    # 如果Gitee失败，尝试GitHub
+    if [ $CLONE_SUCCESS -eq 0 ]; then
+        echo "尝试从GitHub克隆..."
+        if git clone "$REPO_URL_GITHUB" "$INSTALL_DIR" 2>/dev/null; then
+            CLONE_SUCCESS=1
+            echo "✓ 从GitHub克隆成功"
+        fi
+    fi
+    
+    # 如果GitHub失败，尝试镜像站
+    if [ $CLONE_SUCCESS -eq 0 ]; then
+        echo "尝试从镜像站克隆..."
+        if git clone "$REPO_URL_MIRROR" "$INSTALL_DIR" 2>/dev/null; then
+            CLONE_SUCCESS=1
+            echo "✓ 从镜像站克隆成功"
+        fi
+    fi
+    
+    if [ $CLONE_SUCCESS -eq 0 ]; then
+        echo -e "${RED}错误: 所有镜像源都无法访问${NC}"
+        echo "请尝试手动下载部署包："
+        echo "  1. 访问 https://gitee.com/dong005/iptable-safe"
+        echo "  2. 下载ZIP包并解压到 $INSTALL_DIR"
         exit 1
-    }
+    fi
+    
     cd "$INSTALL_DIR"
 fi
 echo "✓ 仓库克隆/更新完成"
