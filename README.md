@@ -68,7 +68,32 @@ chmod +x auto-install.sh
 
 ### 方式二：Git克隆 + 预编译二进制（推荐）
 
-直接使用仓库中的预编译Linux二进制文件，无需安装Go：
+直接使用仓库中的预编译Linux二进制文件，无需安装Go。
+
+**选项A：使用自动化脚本（最简单）**
+
+```bash
+# 一键部署
+curl -fsSL https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh | bash
+```
+
+或者手动下载后执行：
+
+```bash
+wget https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh
+chmod +x git-deploy.sh
+./git-deploy.sh
+```
+
+自动化脚本会完成：
+- ✅ 检查并安装Git
+- ✅ 克隆/更新仓库
+- ✅ 使用预编译二进制文件
+- ✅ 配置防火墙规则
+- ✅ 配置init.d服务
+- ✅ 启动服务
+
+**选项B：手动部署**
 
 ```bash
 # 1. 克隆仓库到安装目录
