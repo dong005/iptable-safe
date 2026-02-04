@@ -4,20 +4,21 @@
 
 ## 功能特性
 
-- 🔒 **默认安全策略**：默认只开放22（SSH）和80（HTTP）端口
+- 🔒 **默认安全策略**：默认只开放22（SSH）和8888（HTTP）端口
 - 🔐 **密码认证**：用户通过密码认证后自动加入IP白名单
 - 🛡️ **防暴力破解**：限制登录频率，防止密码暴力破解（15分钟内失败5次将被锁定）
 - ⏰ **临时白名单**：用户认证后IP自动加入白名单24小时
 - 👨‍💼 **管理后台**：管理员可管理永久IP白名单
 - 📝 **CRUD功能**：完整的IP白名单增删改查功能
 - 🔑 **密码管理**：支持修改用户密码和管理员密码
-- 💾 **SQLite数据库**：轻量级数据库存储
+- 💾 **纯Go SQLite**：使用modernc.org/sqlite，无需CGO，支持交叉编译
+- 🔄 **自动恢复**：服务器重启后自动从数据库加载白名单
 - 🎨 **现代化UI**：美观的Web界面
+- ✅ **IP验证增强**：防止无效IP（0.0.0.0、空字符串等）被添加
 
 ## 系统要求
 
 - CentOS 6 或更高版本
-- Go 1.15 或更高版本
 - root权限（用于管理iptables）
 - iptables
 
@@ -25,10 +26,125 @@
 
 - **用户密码**：`022018`
 - **管理员密码**：`admin123`
+- **Web端口**：`8888`
 
 ⚠️ **重要**：首次部署后请立即修改默认密码！
 
-## 安装步骤
+## 快速部署（推荐）
+
+### 方式一：使用自动安装脚本
+
+从GitHub下载完整部署包并自动安装：
+
+```bash
+# 1. 下载部署包
+cd /tmp
+wget https://github.com/dong005/iptable-safe/archive/refs/heads/main.zip
+unzip main.zip
+cd iptable-safe-main
+
+# 2. 执行自动安装脚本
+chmod +x auto-install.sh
+./auto-install.sh
+```
+
+自动安装脚本会完成：
+- ✅ 安装必要工具（wget, gcc, sqlite）
+- ✅ 自动下载并安装Go 1.15.15
+- ✅ 创建安装目录 `/opt/iptables-safe`
+- ✅ 解压项目文件
+- ✅ 自动编译程序
+- ✅ 配置iptables防火墙（只开放22和8888端口）
+- ✅ 配置init.d开机自启服务
+- ✅ 初始化数据库和密码
+- ✅ 启动服务
+
+安装完成后访问：`http://your-server-ip:8888`
+
+### 方式二：使用预编译二进制文件
+
+直接使用仓库中的预编译Linux二进制文件：
+
+```bash
+# 1. 克隆仓库
+cd /opt
+git clone https://github.com/dong005/iptable-safe.git
+cd iptable-safe
+
+# 2. 使用预编译的二进制文件
+chmod +x iptables-safe-linux
+mv iptables-safe-linux iptables-safe
+
+# 3. 创建init.d服务
+cat > /etc/init.d/iptables-safe << 'EOF'
+#!/bin/bash
+# chkconfig: 2345 90 10
+# description: IPTables Safe Service
+
+DAEMON=/opt/iptables-safe/iptables-safe
+PIDFILE=/var/run/iptables-safe.pid
+LOGFILE=/var/log/iptables-safe.log
+
+case "$1" in
+    start)
+        echo "Starting iptables-safe..."
+        cd /opt/iptables-safe
+        nohup $DAEMON >> $LOGFILE 2>&1 &
+        echo $! > $PIDFILE
+        echo "Started"
+        ;;
+    stop)
+        echo "Stopping iptables-safe..."
+        if [ -f $PIDFILE ]; then
+            kill $(cat $PIDFILE)
+            rm -f $PIDFILE
+            echo "Stopped"
+        fi
+        ;;
+    restart)
+        $0 stop
+        sleep 2
+        $0 start
+        ;;
+    status)
+        if [ -f $PIDFILE ] && kill -0 $(cat $PIDFILE) 2>/dev/null; then
+            echo "iptables-safe is running (PID: $(cat $PIDFILE))"
+        else
+            echo "iptables-safe is not running"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+EOF
+
+chmod +x /etc/init.d/iptables-safe
+chkconfig --add iptables-safe
+chkconfig iptables-safe on
+
+# 4. 启动服务
+service iptables-safe start
+```
+
+### 方式三：从源码编译
+
+如果需要从源码编译（需要Go环境）：
+
+```bash
+# 1. 克隆仓库
+cd /opt
+git clone https://github.com/dong005/iptable-safe.git
+cd iptable-safe
+
+# 2. 编译（需要Go 1.15+）
+go build -o iptables-safe main.go
+
+# 3. 按照方式二的步骤3-4配置服务
+```
+
+## 手动安装步骤
 
 ### 1. 安装Go环境（CentOS 6）
 
@@ -120,13 +236,13 @@ sudo systemctl status iptables-safe
 
 ### 用户访问
 
-1. 访问 `http://your-server-ip/`
+1. 访问 `http://your-server-ip:8888/`
 2. 输入密码：`022018`
 3. 认证成功后，您的IP将被加入白名单24小时
 
 ### 管理员访问
 
-1. 访问 `http://your-server-ip/admin`
+1. 访问 `http://your-server-ip:8888/admin`
 2. 输入管理员密码：`admin123`
 3. 进入管理后台
 
@@ -183,11 +299,11 @@ sudo iptables -L -n -v
 
 ## 故障排除
 
-### 端口80被占用
+### 端口8888被占用
 
 ```bash
 # 查看占用端口的进程
-sudo netstat -tlnp | grep :80
+sudo netstat -tlnp | grep :8888
 
 # 或者修改main.go中的端口号
 # router.Run(":8080")  // 改为其他端口
@@ -205,7 +321,7 @@ sudo iptables -P OUTPUT ACCEPT
 sudo iptables -A INPUT -i lo -j ACCEPT
 sudo iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8888 -j ACCEPT
 
 # 保存规则
 sudo service iptables save
@@ -265,11 +381,12 @@ sudo systemctl start iptables-safe
 
 ## 技术栈
 
-- **后端**：Go 1.15, Gin Web Framework
-- **数据库**：SQLite3
+- **后端**：Go 1.15+, Gin Web Framework
+- **数据库**：SQLite (modernc.org/sqlite - 纯Go实现，无需CGO)
 - **前端**：HTML5, CSS3, JavaScript (Vanilla)
-- **安全**：bcrypt密码加密, 登录频率限制
+- **安全**：bcrypt密码加密, 登录频率限制, IP验证增强
 - **系统**：iptables防火墙管理
+- **部署**：支持本地交叉编译（macOS → Linux）
 
 ## 许可证
 
