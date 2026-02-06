@@ -109,8 +109,13 @@ func IsIPWhitelisted(ip string) bool {
 
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, ip) && strings.Contains(line, "ACCEPT") {
-			return true
+		if strings.Contains(line, "ACCEPT") {
+			fields := strings.Fields(line)
+			for _, field := range fields {
+				if field == ip {
+					return true
+				}
+			}
 		}
 	}
 	return false
