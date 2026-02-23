@@ -12,22 +12,50 @@ import (
 func InitializeFirewall() error {
 	log.Println("Initializing firewall rules...")
 
-	commands := [][]string{
+	// 第一步：清空规则，先保持OUTPUT ACCEPT防止SSH断连
+	initCommands := [][]string{
 		{"iptables", "-F"},
 		{"iptables", "-X"},
 		{"iptables", "-P", "INPUT", "DROP"},
 		{"iptables", "-P", "FORWARD", "DROP"},
 		{"iptables", "-P", "OUTPUT", "ACCEPT"},
-		{"iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT"},
-		{"iptables", "-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"},
-		{"iptables", "-A", "INPUT", "-p", "tcp", "--dport", "22", "-j", "ACCEPT"},
-		{"iptables", "-A", "INPUT", "-p", "tcp", "--dport", "8888", "-j", "ACCEPT"},
 	}
 
-	for _, cmd := range commands {
+	for _, cmd := range initCommands {
 		if err := runCommand(cmd...); err != nil {
 			return fmt.Errorf("failed to execute %v: %v", cmd, err)
 		}
+	}
+
+	// 第二步：添加INPUT链基础规则（只开放8888管理端口，22端口通过白名单IP开放）
+	runCommand("iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT")
+	runCommand("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "8888", "-j", "ACCEPT")
+
+	// 第三步：添加ESTABLISHED,RELATED规则（兼容state和conntrack模块）
+	if err := runCommand("iptables", "-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+		log.Println("state module not available for INPUT, trying conntrack...")
+		if err := runCommand("iptables", "-A", "INPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+			log.Printf("Warning: state/conntrack not available for INPUT, using sport fallback")
+		}
+	}
+
+	// 第四步：添加OUTPUT链规则
+	runCommand("iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT")
+	runCommand("iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "ACCEPT")
+	runCommand("iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
+	// 允许Web管理服务回复客户端（源端口8888的出站流量）
+	runCommand("iptables", "-A", "OUTPUT", "-p", "tcp", "--sport", "8888", "-j", "ACCEPT")
+
+	if err := runCommand("iptables", "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+		log.Println("state module not available for OUTPUT, trying conntrack...")
+		if err := runCommand("iptables", "-A", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
+			log.Printf("Warning: state/conntrack not available for OUTPUT, using sport fallback")
+		}
+	}
+
+	// 第五步：最后才设置OUTPUT为DROP（此时所有规则已就绪）
+	if err := runCommand("iptables", "-P", "OUTPUT", "DROP"); err != nil {
+		return fmt.Errorf("failed to set OUTPUT policy to DROP: %v", err)
 	}
 
 	log.Println("Firewall initialized successfully")
@@ -76,12 +104,19 @@ func AddIPToWhitelist(ip string) error {
 		return nil
 	}
 
+	// INPUT链：允许该IP入站
 	cmd := []string{"iptables", "-I", "INPUT", "1", "-s", ip, "-j", "ACCEPT"}
 	if err := runCommand(cmd...); err != nil {
-		return fmt.Errorf("failed to add IP %s to whitelist: %v", ip, err)
+		return fmt.Errorf("failed to add IP %s to INPUT whitelist: %v", ip, err)
 	}
 
-	log.Printf("Added IP %s to whitelist", ip)
+	// OUTPUT链：允许向该IP出站
+	cmdOut := []string{"iptables", "-I", "OUTPUT", "1", "-d", ip, "-j", "ACCEPT"}
+	if err := runCommand(cmdOut...); err != nil {
+		log.Printf("Warning: failed to add IP %s to OUTPUT whitelist: %v", ip, err)
+	}
+
+	log.Printf("Added IP %s to whitelist (INPUT+OUTPUT)", ip)
 	return nil
 }
 
@@ -90,12 +125,19 @@ func RemoveIPFromWhitelist(ip string) error {
 		return fmt.Errorf("invalid IP address: %s", ip)
 	}
 
+	// 删除INPUT链规则
 	cmd := []string{"iptables", "-D", "INPUT", "-s", ip, "-j", "ACCEPT"}
 	if err := runCommand(cmd...); err != nil {
-		return fmt.Errorf("failed to remove IP %s from whitelist: %v", ip, err)
+		return fmt.Errorf("failed to remove IP %s from INPUT whitelist: %v", ip, err)
 	}
 
-	log.Printf("Removed IP %s from whitelist", ip)
+	// 删除OUTPUT链规则
+	cmdOut := []string{"iptables", "-D", "OUTPUT", "-d", ip, "-j", "ACCEPT"}
+	if err := runCommand(cmdOut...); err != nil {
+		log.Printf("Warning: failed to remove IP %s from OUTPUT whitelist: %v", ip, err)
+	}
+
+	log.Printf("Removed IP %s from whitelist (INPUT+OUTPUT)", ip)
 	return nil
 }
 

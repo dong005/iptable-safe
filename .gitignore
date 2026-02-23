@@ -4,3 +4,4 @@ iptables-safe
 tmp/
 dist/
 .env
+backups/
