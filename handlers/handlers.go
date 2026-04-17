@@ -9,6 +9,7 @@ import (
 
 	"iptables-safe/database"
 	"iptables-safe/iptables"
+	"iptables-safe/vos"
 
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -137,6 +138,13 @@ func GetWhitelistIPs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get whitelist"})
 		return
 	}
+
+	// 检查每个IP的规则状态
+	for i := range ips {
+		ips[i].InputRuleExists = iptables.CheckIPInputRule(ips[i].IP)
+		ips[i].OutputRuleExists = iptables.CheckIPOutputRule(ips[i].IP)
+	}
+
 	c.JSON(http.StatusOK, ips)
 }
 
@@ -294,4 +302,100 @@ func getClientIP(c *gin.Context) string {
 
 func generateToken() string {
 	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+func GetVOSConfig(c *gin.Context) {
+	enabled, err := database.GetVOSSyncEnabled()
+	if err != nil {
+		log.Printf("Error getting VOS sync enabled: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get config"})
+		return
+	}
+
+	interval, err := database.GetVOSSyncInterval()
+	if err != nil {
+		log.Printf("Error getting VOS sync interval: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get config"})
+		return
+	}
+
+	lastSync, err := database.GetVOSLastSync()
+	if err != nil {
+		log.Printf("Error getting VOS last sync: %v", err)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":   enabled,
+		"interval":  interval,
+		"last_sync": lastSync,
+	})
+}
+
+func UpdateVOSConfig(c *gin.Context) {
+	var req struct {
+		Enabled  bool `json:"enabled"`
+		Interval int  `json:"interval" binding:"required,min=1"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+
+	if err := database.UpdateVOSSyncConfig(req.Enabled, req.Interval); err != nil {
+		log.Printf("Error updating VOS config: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update config"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "VOS config updated successfully"})
+}
+
+func ManualVOSSync(c *gin.Context) {
+	log.Println("Manual VOS sync triggered by admin")
+
+	result, err := vos.ManualSync()
+	if err != nil {
+		log.Printf("Error during manual VOS sync: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Sync failed",
+			"details": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":    "Sync completed successfully",
+		"total_ips":  result.TotalIPs,
+		"new_ips":    result.NewIPs,
+		"failed_ips": result.FailedIPs,
+		"sync_time":  result.SyncTime,
+	})
+}
+
+func GetVOSStatus(c *gin.Context) {
+	enabled, _ := database.GetVOSSyncEnabled()
+	interval, _ := database.GetVOSSyncInterval()
+	lastSync, _ := database.GetVOSLastSync()
+
+	ips, err := database.GetAllWhitelistIPs()
+	if err != nil {
+		log.Printf("Error getting whitelist IPs: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get status"})
+		return
+	}
+
+	vosIPCount := 0
+	for _, ip := range ips {
+		if strings.HasPrefix(ip.Description, "VOS-") {
+			vosIPCount++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"enabled":      enabled,
+		"interval":     interval,
+		"last_sync":    lastSync,
+		"vos_ip_count": vosIPCount,
+	})
 }

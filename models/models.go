@@ -5,12 +5,14 @@ import (
 )
 
 type WhitelistIP struct {
-	ID          int       `json:"id"`
-	IP          string    `json:"ip"`
-	Description string    `json:"description"`
-	IsPermanent bool      `json:"is_permanent"`
-	CreatedAt   time.Time `json:"created_at"`
-	ExpiresAt   time.Time `json:"expires_at"`
+	ID               int       `json:"id"`
+	IP               string    `json:"ip"`
+	Description      string    `json:"description"`
+	IsPermanent      bool      `json:"is_permanent"`
+	CreatedAt        time.Time `json:"created_at"`
+	ExpiresAt        time.Time `json:"expires_at"`
+	InputRuleExists  bool      `json:"input_rule_exists"`
+	OutputRuleExists bool      `json:"output_rule_exists"`
 }
 
 type Config struct {

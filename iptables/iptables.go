@@ -65,6 +65,7 @@ func InitializeFirewall() error {
 		log.Printf("Warning: Failed to load whitelist from database: %v", err)
 	}
 
+	log.Println("Firewall initialization complete")
 	return nil
 }
 
@@ -216,4 +217,38 @@ func isValidIP(ip string) bool {
 		}
 	}
 	return true
+}
+
+func CheckIPInputRule(ip string) bool {
+	cmd := exec.Command("iptables", "-L", "INPUT", "-n")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to check INPUT rules: %v", err)
+		return false
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "ACCEPT") && strings.Contains(line, ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func CheckIPOutputRule(ip string) bool {
+	cmd := exec.Command("iptables", "-L", "OUTPUT", "-n")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("Failed to check OUTPUT rules: %v", err)
+		return false
+	}
+
+	lines := strings.Split(string(output), "\n")
+	for _, line := range lines {
+		if strings.Contains(line, "ACCEPT") && strings.Contains(line, ip) {
+			return true
+		}
+	}
+	return false
 }

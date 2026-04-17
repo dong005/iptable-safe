@@ -5,9 +5,10 @@ import (
 	"log"
 	"time"
 
-	_ "modernc.org/sqlite"
-	"golang.org/x/crypto/bcrypt"
 	"iptables-safe/models"
+
+	"golang.org/x/crypto/bcrypt"
+	_ "modernc.org/sqlite"
 )
 
 var DB *sql.DB
@@ -47,7 +48,10 @@ func createTables() error {
 		`CREATE TABLE IF NOT EXISTS config (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			user_password TEXT NOT NULL,
-			admin_password TEXT NOT NULL
+			admin_password TEXT NOT NULL,
+			vos_sync_enabled BOOLEAN DEFAULT 1,
+			vos_sync_interval INTEGER DEFAULT 5,
+			vos_last_sync DATETIME
 		)`,
 		`CREATE TABLE IF NOT EXISTS login_attempts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -212,4 +216,38 @@ func GetActiveWhitelistIPs() ([]string, error) {
 		ips = append(ips, ip)
 	}
 	return ips, nil
+}
+
+func GetVOSSyncEnabled() (bool, error) {
+	var enabled bool
+	err := DB.QueryRow("SELECT vos_sync_enabled FROM config LIMIT 1").Scan(&enabled)
+	return enabled, err
+}
+
+func GetVOSSyncInterval() (int, error) {
+	var interval int
+	err := DB.QueryRow("SELECT vos_sync_interval FROM config LIMIT 1").Scan(&interval)
+	return interval, err
+}
+
+func GetVOSLastSync() (time.Time, error) {
+	var lastSync sql.NullTime
+	err := DB.QueryRow("SELECT vos_last_sync FROM config LIMIT 1").Scan(&lastSync)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if lastSync.Valid {
+		return lastSync.Time, nil
+	}
+	return time.Time{}, nil
+}
+
+func UpdateVOSSyncConfig(enabled bool, interval int) error {
+	_, err := DB.Exec("UPDATE config SET vos_sync_enabled = ?, vos_sync_interval = ? WHERE id = 1", enabled, interval)
+	return err
+}
+
+func UpdateVOSLastSync() error {
+	_, err := DB.Exec("UPDATE config SET vos_last_sync = datetime('now') WHERE id = 1")
+	return err
 }
