@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 远程服务器配置
-REMOTE_HOST="192.168.11.4"
+REMOTE_HOST="1.1.1.1"
 REMOTE_USER="root"
 REMOTE_DIR="/root"
 SERVICE_NAME="iptables-safe"
@@ -180,4 +180,4 @@ EOF
 
 echo -e "\n${GREEN}=== 部署完成 ===${NC}"
 echo -e "${GREEN}服务已设置为开机自动启动${NC}"
-echo -e "${GREEN}访问地址: http://103.254.148.168:8888${NC}"
+echo -e "${GREEN}访问地址: http://1.1.1.1:8899${NC}"

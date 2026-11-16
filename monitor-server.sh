@@ -1,6 +1,6 @@
 #!/bin/bash
 
-SERVER="103.254.148.165"
+SERVER="1.1.1.1"
 CHECK_INTERVAL=30
 
 echo "开始监控服务器 $SERVER 的连接状态..."

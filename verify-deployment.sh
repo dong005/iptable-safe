@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 远程服务器配置
-REMOTE_HOST="103.254.148.165"
+REMOTE_HOST="1.1.1.1"
 REMOTE_USER="root"
 REMOTE_PASS="022018"
 SSH_OPTS="-o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o ConnectTimeout=20"
@@ -56,7 +56,7 @@ EOF
 
 if [ $? -eq 0 ]; then
     echo -e "\n${GREEN}=== 验证完成 ===${NC}"
-    echo -e "${GREEN}访问地址: http://103.254.148.165:8888${NC}"
+    echo -e "${GREEN}访问地址: http://1.1.1.1:8899${NC}"
 else
     echo -e "\n${RED}=== 验证失败，请检查网络连接 ===${NC}"
     exit 1
