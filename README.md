@@ -1,445 +1,233 @@
 # IPTables Safe - IP白名单管理系统
 
-一个基于Go开发的iptables防火墙管理应用，提供Web界面进行IP白名单管理。
+基于 Go 的 iptables 防火墙管理应用：默认只开放认证端口，密码认证后将该来源 IP 加入白名单（全端口放行）。
 
 ## 功能特性
 
-- 🔒 **默认安全策略**：默认只开放认证端口 8899；登录成功后该来源 IP 全端口放行（不默认对全世界开放 22）
-- 🔐 **密码认证**：用户通过密码认证后自动加入IP白名单
-- 🛡️ **防暴力破解**：用户/管理员登录均限流（15分钟内失败5次锁定）
-- 🔑 **会话鉴权**：管理后台使用服务端会话校验，伪造 Cookie 无效
-- 🧱 **防 IP 伪造**：不信任 `X-Forwarded-For` / `X-Real-IP`，仅用直连地址
-- ⏰ **临时白名单**：用户认证后IP自动加入白名单24小时
-- 👨‍💼 **管理后台**：管理员可管理永久IP白名单，支持后台改端口并实时生效
-- 🖥️ **命令行改密**：`iptables-safe passwd user|admin <新密码>`
-- 💾 **纯Go SQLite**：使用modernc.org/sqlite，无需CGO，支持交叉编译
-- 🔄 **自动恢复**：服务器重启后自动从数据库加载白名单
-- ✅ **IP验证增强**：防止无效IP（0.0.0.0、空字符串等）被添加
+- **默认安全策略**：只开放认证端口 `8899`；认证成功后对该 IP `ACCEPT`（不默认对全世界开放 22）
+- **密码认证**：用户登录后自动加入临时白名单（24 小时）
+- **防暴力破解**：用户/管理员登录均限流（15 分钟内失败 5 次锁定）
+- **会话鉴权**：管理后台使用服务端会话，伪造 Cookie 无效
+- **防 IP 伪造**：不信任 `X-Forwarded-For` / `X-Real-IP`，仅使用直连地址
+- **管理后台**：白名单 CRUD、改密、改端口（实时生效）、VOS 同步
+- **命令行改密/改端口**：无需进后台也可维护
+- **纯 Go SQLite**：`modernc.org/sqlite`，无需 CGO
+- **自动恢复**：重启后从数据库加载白名单并重建规则
 
-## 系统要求
+## 默认账号
 
-- CentOS 6 或更高版本
-- root权限（用于管理iptables）
-- iptables
+| 项目 | 默认值 |
+|------|--------|
+| 用户密码 | `022018` |
+| 管理员密码 | `admin123` |
+| Web 端口 | `8899` |
 
-## 默认密码
+⚠️ **首次部署后请立即修改默认密码。**
 
-- **用户密码**：`022018`
-- **管理员密码**：`admin123`
-- **Web端口**：`8899`（可用环境变量 `IPTABLES_SAFE_PORT` 或后台/命令行修改）
+端口可用以下方式修改（任选）：
 
-⚠️ **重要**：首次部署后请立即修改默认密码！
+- 环境变量：`IPTABLES_SAFE_PORT=8899`
+- 管理后台「服务端口」：保存后实时生效
+- 命令行：`./iptables-safe set-port 8899`（需重启或后台热切换）
 
-## 快速部署（推荐）
+## 推荐部署（本机一键）
 
-**🇨🇳 国内服务器用户请注意**：
-- GitHub访问受限，请使用 **Gitee镜像** 或 **手动下载**
-- 推荐使用下方的 **国内专用命令**
-
-**三种部署方式对比**：
-- **方式一**：全自动安装（会自动下载Go并编译）- 适合首次部署
-- **方式二**：使用预编译文件（无需Go环境）- 适合快速部署 ⭐
-- **方式三**：源码编译（需要Go环境）- 仅在需要修改代码时使用
-
-### 方式一：使用自动安装脚本（全自动）
-
-从GitHub下载完整部署包并自动安装（会自动下载Go 1.15.15并编译）：
+适用 CentOS 7+，会自动安装缺失依赖、编译并安装到 `/opt/iptables-safe`：
 
 ```bash
-# 1. 下载部署包
 cd /tmp
 wget https://github.com/dong005/iptable-safe/archive/refs/heads/main.zip
-unzip main.zip
+unzip -o main.zip
 cd iptable-safe-main
 
-# 2. 执行自动安装脚本
-chmod +x auto-install.sh
-./auto-install.sh
+chmod +x deploy-local.sh
+./deploy-local.sh
 ```
 
-自动安装脚本会完成：
-- ✅ 安装必要工具（wget, gcc, sqlite）
-- ✅ 自动下载并安装Go 1.15.15
-- ✅ 创建安装目录 `/opt/iptables-safe`
-- ✅ 解压项目文件
-- ✅ 自动编译程序
-- ✅ 配置iptables防火墙（只开放22和8888端口）
-- ✅ 配置init.d开机自启服务
-- ✅ 初始化数据库和密码
-- ✅ 启动服务
+也可指定端口：
 
-安装完成后访问：`http://your-server-ip:8888`
-
-### 方式二：Git克隆 + 预编译二进制（推荐）⭐
-
-直接使用仓库中的预编译Linux二进制文件，无需安装Go。
-
-**选项A：使用自动化脚本（最简单）**
-
-**🇨🇳 国内服务器（推荐）：**
 ```bash
-# GitHub可以克隆，但raw.githubusercontent.com被墙
-# 方案：先克隆仓库，再执行脚本
+IPTABLES_SAFE_PORT=8899 ./deploy-local.sh
+```
+
+部署完成后：
+
+- 用户页：`http://<服务器IP>:8899/`
+- 管理页：`http://<服务器IP>:8899/admin`
+- 二进制/数据库：`/opt/iptables-safe/`
+- systemd 服务名：`iptables-safe`
+
+常用运维：
+
+```bash
+systemctl status iptables-safe
+systemctl restart iptables-safe
+journalctl -u iptables-safe -f
+```
+
+## 命令行工具
+
+在安装目录执行（不要无参启动第二个实例）：
+
+```bash
+cd /opt/iptables-safe
+
+# 修改用户/管理员密码（立即生效）
+./iptables-safe passwd user '新密码'
+./iptables-safe passwd admin '新密码'
+
+# 保存监听端口到数据库（建议再用后台热切换，或 restart 服务）
+./iptables-safe set-port 8899
+
+# 查看帮助
+./iptables-safe help
+```
+
+## 其他部署方式
+
+### Git 克隆后部署
+
+```bash
 cd /tmp
 git clone https://github.com/dong005/iptable-safe.git
 cd iptable-safe
-chmod +x git-deploy.sh
-./git-deploy.sh
+chmod +x deploy-local.sh
+./deploy-local.sh
 ```
 
-**🌍 国外服务器（一键部署）：**
-```bash
-# 直接通过curl执行
-curl -fsSL https://raw.githubusercontent.com/dong005/iptable-safe/main/git-deploy.sh | bash
-```
+> 旧脚本 `auto-install.sh` / `git-deploy.sh` 仍保留，但推荐优先使用 `deploy-local.sh`（端口 8899、systemd、SRC 加固后的二进制）。
 
-自动化脚本会自动尝试多个镜像源：
-- ✅ 优先使用Gitee（国内速度快）
-- ✅ 备用GitHub源
-- ✅ 备用镜像站
-- ✅ 检查并安装Git
-- ✅ 使用预编译二进制文件
-- ✅ 配置防火墙规则
-- ✅ 配置init.d服务
-- ✅ 启动服务
+### 源码编译
 
-**选项B：手动部署**
+需要 Go 1.22+（脚本会尝试自动下载）：
 
 ```bash
-# 1. 克隆仓库到安装目录
-cd /opt
-
-# 国内服务器使用Gitee（推荐）
-git clone https://gitee.com/dong005/iptable-safe.git iptables-safe
-
-# 或使用GitHub
-# git clone https://github.com/dong005/iptable-safe.git iptables-safe
-
-cd iptables-safe
-
-# 2. 使用预编译的二进制文件（无需编译）
-chmod +x iptables-safe-linux
-mv iptables-safe-linux iptables-safe
-
-# 3. 创建init.d服务
-cat > /etc/init.d/iptables-safe << 'EOF'
-#!/bin/bash
-# chkconfig: 2345 90 10
-# description: IPTables Safe Service
-
-DAEMON=/opt/iptables-safe/iptables-safe
-PIDFILE=/var/run/iptables-safe.pid
-LOGFILE=/var/log/iptables-safe.log
-
-case "$1" in
-    start)
-        echo "Starting iptables-safe..."
-        cd /opt/iptables-safe
-        nohup $DAEMON >> $LOGFILE 2>&1 &
-        echo $! > $PIDFILE
-        echo "Started"
-        ;;
-    stop)
-        echo "Stopping iptables-safe..."
-        if [ -f $PIDFILE ]; then
-            kill $(cat $PIDFILE)
-            rm -f $PIDFILE
-            echo "Stopped"
-        fi
-        ;;
-    restart)
-        $0 stop
-        sleep 2
-        $0 start
-        ;;
-    status)
-        if [ -f $PIDFILE ] && kill -0 $(cat $PIDFILE) 2>/dev/null; then
-            echo "iptables-safe is running (PID: $(cat $PIDFILE))"
-        else
-            echo "iptables-safe is not running"
-        fi
-        ;;
-    *)
-        echo "Usage: $0 {start|stop|restart|status}"
-        exit 1
-        ;;
-esac
-EOF
-
-chmod +x /etc/init.d/iptables-safe
-chkconfig --add iptables-safe
-chkconfig iptables-safe on
-
-# 4. 启动服务
-service iptables-safe start
-```
-
-### 方式三：从源码编译（仅在需要修改代码时使用）
-
-如果需要修改源码后重新编译（需要Go 1.15+环境）：
-
-```bash
-# 1. 克隆仓库
-cd /opt
-git clone https://github.com/dong005/iptable-safe.git iptables-safe
-cd iptables-safe
-
-# 2. 编译（需要先安装Go环境）
-go build -o iptables-safe main.go
-
-# 3. 按照方式二的步骤3-4配置服务
-```
-
-**注意**：大多数情况下使用方式一或方式二即可，无需从源码编译。
-
-## 手动安装步骤
-
-### 1. 安装Go环境（CentOS 6）
-
-```bash
-# 下载Go 1.15（兼容CentOS 6）
-cd /tmp
-wget https://golang.org/dl/go1.15.15.linux-amd64.tar.gz
-
-# 解压到/usr/local
-sudo tar -C /usr/local -xzf go1.15.15.linux-amd64.tar.gz
-
-# 设置环境变量
-echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
-echo 'export GOPATH=$HOME/go' >> ~/.bashrc
-source ~/.bashrc
-
-# 验证安装
-go version
-```
-
-### 2. 编译应用
-
-```bash
-# 进入项目目录
-cd /path/to/iptables-safe
-
-# 下载依赖
-go mod download
-
-# 编译
-go build -o iptables-safe main.go
-```
-
-### 3. 配置防火墙
-
-```bash
-# 确保iptables服务已安装
-sudo yum install iptables iptables-services -y
-
-# 启动iptables服务
-sudo service iptables start
-sudo chkconfig iptables on
-```
-
-### 4. 运行应用
-
-```bash
-# 需要root权限运行
-sudo ./iptables-safe
-```
-
-## 使用systemd服务（推荐）
-
-创建服务文件：
-
-```bash
-sudo nano /etc/systemd/system/iptables-safe.service
-```
-
-添加以下内容：
-
-```ini
-[Unit]
-Description=IPTables Safe Service
-After=network.target
-
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/path/to/iptables-safe
-ExecStart=/path/to/iptables-safe/iptables-safe
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动服务：
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl start iptables-safe
-sudo systemctl enable iptables-safe
-sudo systemctl status iptables-safe
+export GOPROXY=https://goproxy.cn,direct
+go mod tidy
+go build -o iptables-safe .
 ```
 
 ## 使用说明
 
 ### 用户访问
 
-1. 访问 `http://your-server-ip:8888/`
-2. 输入密码：`022018`
-3. 认证成功后，您的IP将被加入白名单24小时
+1. 打开 `http://<IP>:8899/`
+2. 输入用户密码
+3. 成功后，你的公网出口 IP 加入白名单 24 小时（可访问本机全部端口）
 
 ### 管理员访问
 
-1. 访问 `http://your-server-ip:8888/admin`
-2. 输入管理员密码：`admin123`
-3. 进入管理后台
+1. 打开 `http://<IP>:8899/admin`
+2. 输入管理员密码
+3. 可管理白名单、密码、服务端口、VOS 同步
 
-### 管理后台功能
+### 防火墙模型
 
-- **IP白名单管理**
-  - 查看所有白名单IP
-  - 添加永久或临时IP白名单
-  - 删除白名单IP
-  
-- **密码管理**
-  - 修改用户密码
-  - 修改管理员密码
+启动时大致规则：
+
+- `INPUT` 默认 `DROP`
+- 放行 `lo`、`ESTABLISHED,RELATED`
+- 放行 TCP 认证端口（默认 8899）
+- 白名单 IP：`-s <IP> -j ACCEPT`（入站全放行）
+- `OUTPUT` 保持 `ACCEPT`（避免误杀出站）
 
 ## 安全建议
 
-1. ✅ 首次部署后立即修改默认密码
-2. ✅ 使用强密码（至少8位，包含大小写字母、数字和特殊字符）
-3. ✅ 定期更换密码
-4. ✅ 限制管理后台访问IP
-5. ✅ 定期检查白名单IP列表
-6. ✅ 启用HTTPS（建议使用Nginx反向代理）
+1. 立即修改默认用户/管理员密码
+2. 使用强密码（建议 ≥ 8 位）
+3. 不要把管理端口暴露给不必要的网段；可按需再收紧
+4. 定期检查白名单
+5. 生产环境建议前置 HTTPS（Nginx/Caddy 反代）
+6. Token、密码不要提交到仓库或发到公开聊天
 
 ## 目录结构
 
 ```
 iptables-safe/
-├── main.go                 # 主程序入口
-├── go.mod                  # Go模块依赖
-├── models/                 # 数据模型
-│   └── models.go
-├── database/               # 数据库操作
-│   └── database.go
-├── iptables/               # iptables管理
-│   └── iptables.go
-├── handlers/               # HTTP处理器
-│   └── handlers.go
-├── templates/              # HTML模板
-│   ├── login.html
-│   ├── admin_login.html
-│   └── admin_dashboard.html
+├── main.go                 # 入口 / CLI
+├── deploy-local.sh         # 推荐一键部署
+├── serverctl/              # HTTP 热切换端口
+├── handlers/               # HTTP + 会话鉴权
+├── database/               # SQLite
+├── iptables/               # 防火墙规则
+├── models/
+├── vos/                    # VOS 同步
+├── templates/              # Web 页面
 └── README.md
 ```
 
-## 日志查看
+## API
 
-```bash
-# 查看服务日志
-sudo journalctl -u iptables-safe -f
+### 公开
 
-# 查看iptables规则
-sudo iptables -L -n -v
-```
+- `POST /api/login` — 用户认证并加白
+- `POST /api/admin/login` — 管理员登录（写入会话 Cookie）
+- `POST /api/admin/logout` — 管理员退出
+
+### 需管理员会话
+
+- `GET/POST /api/admin/whitelist`
+- `DELETE /api/admin/whitelist/:id`
+- `PUT /api/admin/password/user`
+- `PUT /api/admin/password/admin`
+- `GET/PUT /api/admin/port` — 查询/修改监听端口（热生效）
+- `GET/PUT /api/admin/vos/config`
+- `POST /api/admin/vos/sync`
+- `GET /api/admin/vos/status`
 
 ## 故障排除
 
-### 端口8888被占用
+### 看端口与进程
 
 ```bash
-# 查看占用端口的进程
-sudo netstat -tlnp | grep :8888
-
-# 或者修改main.go中的端口号
-# router.Run(":8080")  // 改为其他端口
+ss -tlnp | grep 8899
+systemctl status iptables-safe
 ```
 
-### iptables规则未生效
+### 看防火墙
 
 ```bash
-# 手动初始化防火墙规则
-sudo iptables -F
-sudo iptables -X
-sudo iptables -P INPUT DROP
-sudo iptables -P FORWARD DROP
-sudo iptables -P OUTPUT ACCEPT
-sudo iptables -A INPUT -i lo -j ACCEPT
-sudo iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-sudo iptables -A INPUT -p tcp --dport 8888 -j ACCEPT
-
-# 保存规则
-sudo service iptables save
+iptables -L INPUT -n -v --line-numbers
 ```
 
-### 数据库权限问题
+### 改端口后打不开
+
+确认防火墙已放行新端口，或在后台改端口（会同步改 iptables）。也可：
 
 ```bash
-# 确保数据库文件有正确的权限
-sudo chmod 644 iptables-safe.db
-sudo chown root:root iptables-safe.db
+/opt/iptables-safe/iptables-safe set-port 8899
+systemctl restart iptables-safe
 ```
 
-## 备份与恢复
+### SSH 担心被锁
 
-### 备份数据库
+程序会保留 `ESTABLISHED,RELATED`。部署前建议确认当前 SSH 来源 IP，必要时先手动加白：
 
 ```bash
-cp iptables-safe.db iptables-safe.db.backup
+iptables -I INPUT 1 -s <你的IP> -j ACCEPT
 ```
 
-### 恢复数据库
+## 备份
 
 ```bash
-cp iptables-safe.db.backup iptables-safe.db
-sudo systemctl restart iptables-safe
+cp /opt/iptables-safe/iptables-safe.db /root/iptables-safe.db.backup
 ```
 
-## 更新应用
+恢复后重启服务：
 
 ```bash
-# 停止服务
-sudo systemctl stop iptables-safe
-
-# 备份数据库
-cp iptables-safe.db iptables-safe.db.backup
-
-# 重新编译
-go build -o iptables-safe main.go
-
-# 启动服务
-sudo systemctl start iptables-safe
+cp /root/iptables-safe.db.backup /opt/iptables-safe/iptables-safe.db
+systemctl restart iptables-safe
 ```
-
-## API接口
-
-### 用户认证
-- `POST /api/login` - 用户登录认证
-
-### 管理员接口（需要认证）
-- `POST /api/admin/login` - 管理员登录
-- `GET /api/admin/whitelist` - 获取白名单列表
-- `POST /api/admin/whitelist` - 添加白名单IP
-- `DELETE /api/admin/whitelist/:id` - 删除白名单IP
-- `PUT /api/admin/password/user` - 修改用户密码
-- `PUT /api/admin/password/admin` - 修改管理员密码
 
 ## 技术栈
 
-- **后端**：Go 1.15+, Gin Web Framework
-- **数据库**：SQLite (modernc.org/sqlite - 纯Go实现，无需CGO)
-- **前端**：HTML5, CSS3, JavaScript (Vanilla)
-- **安全**：bcrypt密码加密, 登录频率限制, IP验证增强
-- **系统**：iptables防火墙管理
-- **部署**：支持本地交叉编译（macOS → Linux）
+- Go + Gin
+- SQLite（modernc.org/sqlite）
+- bcrypt
+- iptables
+- systemd
 
 ## 许可证
 
 MIT License
-
-## 联系方式
-
-如有问题或建议，请联系系统管理员。
