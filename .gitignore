@@ -5,3 +5,7 @@ tmp/
 dist/
 .env
 backups/
+iptables-safe-linux
+iptables-safe-new
+iptables-safe-test
+iptables-safe-complete.tar.gz

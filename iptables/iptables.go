@@ -4,15 +4,22 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"iptables-safe/database"
 )
 
-func InitializeFirewall() error {
-	log.Println("Initializing firewall rules...")
+var currentAuthPort int = 8899
 
-	// 第一步：清空规则，先保持OUTPUT ACCEPT防止SSH断连
+func InitializeFirewall(authPort int) error {
+	log.Println("Initializing firewall rules...")
+	if authPort <= 0 {
+		authPort = 8899
+	}
+	currentAuthPort = authPort
+
+	// 默认拒绝入站；仅开放认证口；登录后该 IP 全端口放行。出站 ACCEPT。
 	initCommands := [][]string{
 		{"iptables", "-F"},
 		{"iptables", "-X"},
@@ -20,68 +27,61 @@ func InitializeFirewall() error {
 		{"iptables", "-P", "FORWARD", "DROP"},
 		{"iptables", "-P", "OUTPUT", "ACCEPT"},
 	}
-
 	for _, cmd := range initCommands {
 		if err := runCommand(cmd...); err != nil {
 			return fmt.Errorf("failed to execute %v: %v", cmd, err)
 		}
 	}
 
-	// 第二步：添加INPUT链基础规则（只开放8888管理端口，22端口通过白名单IP开放）
-	runCommand("iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT")
-	runCommand("iptables", "-A", "INPUT", "-p", "tcp", "--dport", "8888", "-j", "ACCEPT")
-
-	// 第三步：添加ESTABLISHED,RELATED规则（兼容state和conntrack模块）
+	_ = runCommand("iptables", "-A", "INPUT", "-i", "lo", "-j", "ACCEPT")
 	if err := runCommand("iptables", "-A", "INPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
 		log.Println("state module not available for INPUT, trying conntrack...")
 		if err := runCommand("iptables", "-A", "INPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
-			log.Printf("Warning: state/conntrack not available for INPUT, using sport fallback")
+			log.Printf("Warning: state/conntrack not available for INPUT")
 		}
 	}
 
-	// 第四步：添加OUTPUT链规则
-	runCommand("iptables", "-A", "OUTPUT", "-o", "lo", "-j", "ACCEPT")
-	runCommand("iptables", "-A", "OUTPUT", "-p", "udp", "--dport", "53", "-j", "ACCEPT")
-	runCommand("iptables", "-A", "OUTPUT", "-p", "tcp", "--dport", "53", "-j", "ACCEPT")
-	// 允许Web管理服务回复客户端（源端口8888的出站流量）
-	runCommand("iptables", "-A", "OUTPUT", "-p", "tcp", "--sport", "8888", "-j", "ACCEPT")
-
-	if err := runCommand("iptables", "-A", "OUTPUT", "-m", "state", "--state", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
-		log.Println("state module not available for OUTPUT, trying conntrack...")
-		if err := runCommand("iptables", "-A", "OUTPUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"); err != nil {
-			log.Printf("Warning: state/conntrack not available for OUTPUT, using sport fallback")
-		}
+	portStr := strconv.Itoa(authPort)
+	if err := runCommand("iptables", "-A", "INPUT", "-p", "tcp", "--dport", portStr, "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("failed to open auth port %d: %v", authPort, err)
 	}
 
-	// 第五步：最后才设置OUTPUT为DROP（此时所有规则已就绪）
-	if err := runCommand("iptables", "-P", "OUTPUT", "DROP"); err != nil {
-		return fmt.Errorf("failed to set OUTPUT policy to DROP: %v", err)
-	}
+	log.Printf("Firewall initialized (INPUT DROP, only :%d open)", authPort)
 
-	log.Println("Firewall initialized successfully")
-
-	// 从数据库加载活跃的白名单IP
 	if err := LoadWhitelistFromDB(); err != nil {
 		log.Printf("Warning: Failed to load whitelist from database: %v", err)
 	}
-
 	log.Println("Firewall initialization complete")
+	return nil
+}
+
+func UpdateAuthPort(oldPort, newPort int) error {
+	if newPort <= 0 || newPort > 65535 {
+		return fmt.Errorf("invalid port: %d", newPort)
+	}
+	oldStr := strconv.Itoa(oldPort)
+	newStr := strconv.Itoa(newPort)
+
+	// 先放行新端口，再删旧端口，避免管理口短暂不可达
+	if err := runCommand("iptables", "-I", "INPUT", "1", "-p", "tcp", "--dport", newStr, "-j", "ACCEPT"); err != nil {
+		return fmt.Errorf("failed to add new auth port %d: %v", newPort, err)
+	}
+	_ = runCommand("iptables", "-D", "INPUT", "-p", "tcp", "--dport", oldStr, "-j", "ACCEPT")
+	currentAuthPort = newPort
+	log.Printf("Auth port updated: %d -> %d", oldPort, newPort)
 	return nil
 }
 
 func LoadWhitelistFromDB() error {
 	log.Println("Loading whitelist IPs from database...")
-
 	ips, err := database.GetActiveWhitelistIPs()
 	if err != nil {
 		return fmt.Errorf("failed to get whitelist IPs: %v", err)
 	}
-
 	if len(ips) == 0 {
 		log.Println("No whitelist IPs to load")
 		return nil
 	}
-
 	loaded := 0
 	for _, ip := range ips {
 		if err := AddIPToWhitelist(ip); err != nil {
@@ -90,7 +90,6 @@ func LoadWhitelistFromDB() error {
 		}
 		loaded++
 	}
-
 	log.Printf("Loaded %d whitelist IP(s) from database", loaded)
 	return nil
 }
@@ -99,25 +98,15 @@ func AddIPToWhitelist(ip string) error {
 	if !isValidIP(ip) {
 		return fmt.Errorf("invalid IP address: %s", ip)
 	}
-
 	if IsIPWhitelisted(ip) {
 		log.Printf("IP %s is already whitelisted", ip)
 		return nil
 	}
-
-	// INPUT链：允许该IP入站
 	cmd := []string{"iptables", "-I", "INPUT", "1", "-s", ip, "-j", "ACCEPT"}
 	if err := runCommand(cmd...); err != nil {
 		return fmt.Errorf("failed to add IP %s to INPUT whitelist: %v", ip, err)
 	}
-
-	// OUTPUT链：允许向该IP出站
-	cmdOut := []string{"iptables", "-I", "OUTPUT", "1", "-d", ip, "-j", "ACCEPT"}
-	if err := runCommand(cmdOut...); err != nil {
-		log.Printf("Warning: failed to add IP %s to OUTPUT whitelist: %v", ip, err)
-	}
-
-	log.Printf("Added IP %s to whitelist (INPUT+OUTPUT)", ip)
+	log.Printf("Added IP %s to whitelist (full inbound access)", ip)
 	return nil
 }
 
@@ -125,20 +114,11 @@ func RemoveIPFromWhitelist(ip string) error {
 	if !isValidIP(ip) {
 		return fmt.Errorf("invalid IP address: %s", ip)
 	}
-
-	// 删除INPUT链规则
-	cmd := []string{"iptables", "-D", "INPUT", "-s", ip, "-j", "ACCEPT"}
-	if err := runCommand(cmd...); err != nil {
+	if err := runCommand("iptables", "-D", "INPUT", "-s", ip, "-j", "ACCEPT"); err != nil {
 		return fmt.Errorf("failed to remove IP %s from INPUT whitelist: %v", ip, err)
 	}
-
-	// 删除OUTPUT链规则
-	cmdOut := []string{"iptables", "-D", "OUTPUT", "-d", ip, "-j", "ACCEPT"}
-	if err := runCommand(cmdOut...); err != nil {
-		log.Printf("Warning: failed to remove IP %s from OUTPUT whitelist: %v", ip, err)
-	}
-
-	log.Printf("Removed IP %s from whitelist (INPUT+OUTPUT)", ip)
+	_ = runCommand("iptables", "-D", "OUTPUT", "-d", ip, "-j", "ACCEPT")
+	log.Printf("Removed IP %s from whitelist", ip)
 	return nil
 }
 
@@ -149,13 +129,12 @@ func IsIPWhitelisted(ip string) bool {
 		log.Printf("Failed to check iptables rules: %v", err)
 		return false
 	}
-
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
 		if strings.Contains(line, "ACCEPT") {
 			fields := strings.Fields(line)
 			for _, field := range fields {
-				if field == ip {
+				if field == ip || field == ip+"/32" {
 					return true
 				}
 			}
@@ -186,21 +165,13 @@ func runCommand(args ...string) error {
 }
 
 func isValidIP(ip string) bool {
-	// 拒绝空字符串
-	if ip == "" {
+	if ip == "" || ip == "0.0.0.0" {
 		return false
 	}
-
 	parts := strings.Split(ip, ".")
 	if len(parts) != 4 {
 		return false
 	}
-
-	// 拒绝 0.0.0.0
-	if ip == "0.0.0.0" {
-		return false
-	}
-
 	for _, part := range parts {
 		if len(part) == 0 || len(part) > 3 {
 			return false
@@ -220,33 +191,23 @@ func isValidIP(ip string) bool {
 }
 
 func CheckIPInputRule(ip string) bool {
-	cmd := exec.Command("iptables", "-L", "INPUT", "-n")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		log.Printf("Failed to check INPUT rules: %v", err)
-		return false
-	}
-
-	lines := strings.Split(string(output), "\n")
-	for _, line := range lines {
-		if strings.Contains(line, "ACCEPT") && strings.Contains(line, ip) {
-			return true
-		}
-	}
-	return false
+	return IsIPWhitelisted(ip)
 }
 
 func CheckIPOutputRule(ip string) bool {
+	// 当前策略 OUTPUT 默认 ACCEPT，出站不受白名单限制
 	cmd := exec.Command("iptables", "-L", "OUTPUT", "-n")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Printf("Failed to check OUTPUT rules: %v", err)
-		return false
+		return true
 	}
-
+	first := strings.SplitN(string(output), "\n", 2)[0]
+	if strings.Contains(first, "policy ACCEPT") {
+		return true
+	}
 	lines := strings.Split(string(output), "\n")
 	for _, line := range lines {
-		if strings.Contains(line, "ACCEPT") && strings.Contains(line, ip) {
+		if strings.Contains(line, "ACCEPT") && (strings.Contains(line, ip) || strings.Contains(line, ip+"/32")) {
 			return true
 		}
 	}

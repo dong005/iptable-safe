@@ -261,6 +261,18 @@
                     <button class="btn btn-success" onclick="updateAdminPassword()">更新管理员密码</button>
                 </div>
             </div>
+            <p style="margin-top: 15px; color: #888; font-size: 13px;">也可命令行修改：<code>./iptables-safe passwd user|admin &lt;新密码&gt;</code></p>
+        </div>
+
+        <div class="card">
+            <h2>服务端口</h2>
+            <div id="portMessage" class="message"></div>
+            <div class="form-group" style="max-width: 320px;">
+                <label>监听端口（修改后实时生效）</label>
+                <input type="text" id="listenPort" placeholder="默认 8899">
+            </div>
+            <button class="btn btn-success" onclick="updateListenPort()">保存并切换端口</button>
+            <p style="margin-top: 10px; color: #888; font-size: 13px;">当前访问地址会随端口变化，保存后请用新端口重新打开管理页。</p>
         </div>
 
         <div class="card">
@@ -508,9 +520,56 @@
             }
         }
 
-        function logout() {
+        async function logout() {
+            try {
+                await fetch('/api/admin/logout', { method: 'POST' });
+            } catch (e) {}
             document.cookie = 'admin_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
             window.location.href = '/admin';
+        }
+
+        async function loadListenPort() {
+            try {
+                const response = await fetch('/api/admin/port');
+                if (response.ok) {
+                    const data = await response.json();
+                    document.getElementById('listenPort').value = data.port;
+                }
+            } catch (error) {
+                console.error('Failed to load port:', error);
+            }
+        }
+
+        async function updateListenPort() {
+            const port = parseInt(document.getElementById('listenPort').value, 10);
+            if (!port || port < 1 || port > 65535) {
+                alert('请输入有效端口 (1-65535)');
+                return;
+            }
+            if (!confirm('确定将服务端口改为 ' + port + ' 并立即生效？')) {
+                return;
+            }
+            try {
+                const response = await fetch('/api/admin/port', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ port }),
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showMessage('portMessage', 'success', '端口已更新为 ' + port + '，正在跳转...');
+                    setTimeout(() => {
+                        window.location.href = window.location.protocol + '//' + window.location.hostname + ':' + port + '/admin/dashboard';
+                    }, 800);
+                } else {
+                    alert(data.error || '端口更新失败');
+                }
+            } catch (error) {
+                // 端口切换后旧连接可能断开，按新端口跳转
+                setTimeout(() => {
+                    window.location.href = window.location.protocol + '//' + window.location.hostname + ':' + port + '/admin/dashboard';
+                }, 500);
+            }
         }
 
         function showMessage(elementId, type, message) {
@@ -622,6 +681,7 @@
         }
 
         loadWhitelistIPs();
+        loadListenPort();
         loadVOSConfig();
         loadVOSStatus();
         setInterval(loadVOSStatus, 30000);

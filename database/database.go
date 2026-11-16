@@ -2,7 +2,10 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
+	"os"
+	"strconv"
 	"time"
 
 	"iptables-safe/models"
@@ -10,6 +13,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
 )
+
+const DefaultListenPort = 8899
 
 var DB *sql.DB
 
@@ -19,19 +24,18 @@ func InitDB(dbPath string) error {
 	if err != nil {
 		return err
 	}
-
 	if err = DB.Ping(); err != nil {
 		return err
 	}
-
 	if err = createTables(); err != nil {
 		return err
 	}
-
+	if err = migrateSchema(); err != nil {
+		return err
+	}
 	if err = initDefaultConfig(); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -51,7 +55,8 @@ func createTables() error {
 			admin_password TEXT NOT NULL,
 			vos_sync_enabled BOOLEAN DEFAULT 1,
 			vos_sync_interval INTEGER DEFAULT 5,
-			vos_last_sync DATETIME
+			vos_last_sync DATETIME,
+			listen_port INTEGER DEFAULT 8899
 		)`,
 		`CREATE TABLE IF NOT EXISTS login_attempts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -61,23 +66,32 @@ func createTables() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_login_attempts_ip ON login_attempts(ip, timestamp)`,
 	}
-
 	for _, query := range queries {
 		if _, err := DB.Exec(query); err != nil {
 			return err
 		}
 	}
+	return nil
+}
 
+func migrateSchema() error {
+	var count int
+	err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('config') WHERE name='listen_port'`).Scan(&count)
+	if err != nil || count == 0 {
+		if _, err := DB.Exec(`ALTER TABLE config ADD COLUMN listen_port INTEGER DEFAULT 8899`); err != nil {
+			// ignore duplicate column errors on older sqlite
+			log.Printf("migrate listen_port: %v", err)
+		}
+	}
+	_, _ = DB.Exec(`UPDATE config SET listen_port = ? WHERE listen_port IS NULL OR listen_port = 0`, DefaultListenPort)
 	return nil
 }
 
 func initDefaultConfig() error {
 	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM config").Scan(&count)
-	if err != nil {
+	if err := DB.QueryRow("SELECT COUNT(*) FROM config").Scan(&count); err != nil {
 		return err
 	}
-
 	if count == 0 {
 		userHash, err := bcrypt.GenerateFromPassword([]byte("022018"), bcrypt.DefaultCost)
 		if err != nil {
@@ -87,16 +101,26 @@ func initDefaultConfig() error {
 		if err != nil {
 			return err
 		}
-
-		_, err = DB.Exec("INSERT INTO config (user_password, admin_password) VALUES (?, ?)",
-			string(userHash), string(adminHash))
+		port := resolveInitialPort()
+		_, err = DB.Exec(
+			"INSERT INTO config (user_password, admin_password, listen_port) VALUES (?, ?, ?)",
+			string(userHash), string(adminHash), port,
+		)
 		if err != nil {
 			return err
 		}
-		log.Println("Default passwords initialized: user=022018, admin=admin123")
+		log.Printf("Default passwords initialized: user=022018, admin=admin123, port=%d", port)
 	}
-
 	return nil
+}
+
+func resolveInitialPort() int {
+	if v := os.Getenv("IPTABLES_SAFE_PORT"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 && p <= 65535 {
+			return p
+		}
+	}
+	return DefaultListenPort
 }
 
 func GetConfig() (*models.Config, error) {
@@ -107,6 +131,26 @@ func GetConfig() (*models.Config, error) {
 		return nil, err
 	}
 	return config, nil
+}
+
+func GetListenPort() (int, error) {
+	var port sql.NullInt64
+	err := DB.QueryRow("SELECT listen_port FROM config LIMIT 1").Scan(&port)
+	if err != nil {
+		return DefaultListenPort, err
+	}
+	if !port.Valid || port.Int64 <= 0 {
+		return DefaultListenPort, nil
+	}
+	return int(port.Int64), nil
+}
+
+func UpdateListenPort(port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port: %d", port)
+	}
+	_, err := DB.Exec("UPDATE config SET listen_port = ? WHERE id = 1", port)
+	return err
 }
 
 func UpdateUserPassword(newPassword string) error {
@@ -146,8 +190,7 @@ func GetAllWhitelistIPs() ([]models.WhitelistIP, error) {
 	for rows.Next() {
 		var ip models.WhitelistIP
 		var expiresAt sql.NullTime
-		err := rows.Scan(&ip.ID, &ip.IP, &ip.Description, &ip.IsPermanent, &ip.CreatedAt, &expiresAt)
-		if err != nil {
+		if err := rows.Scan(&ip.ID, &ip.IP, &ip.Description, &ip.IsPermanent, &ip.CreatedAt, &expiresAt); err != nil {
 			return nil, err
 		}
 		if expiresAt.Valid {
@@ -187,9 +230,26 @@ func GetRecentFailedAttempts(ip string, duration time.Duration) (int, error) {
 	return count, err
 }
 
-func CleanupExpiredIPs() error {
-	_, err := DB.Exec("DELETE FROM whitelist_ips WHERE is_permanent = 0 AND expires_at < datetime('now')")
-	return err
+func CleanupExpiredIPs() ([]string, error) {
+	rows, err := DB.Query("SELECT ip FROM whitelist_ips WHERE is_permanent = 0 AND expires_at < datetime('now')")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var expired []string
+	for rows.Next() {
+		var ip string
+		if err := rows.Scan(&ip); err != nil {
+			return nil, err
+		}
+		expired = append(expired, ip)
+	}
+	if len(expired) == 0 {
+		return expired, nil
+	}
+	_, err = DB.Exec("DELETE FROM whitelist_ips WHERE is_permanent = 0 AND expires_at < datetime('now')")
+	return expired, err
 }
 
 func CleanupOldLoginAttempts() error {

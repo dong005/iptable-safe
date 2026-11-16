@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"iptables-safe/database"
 	"iptables-safe/iptables"
+	"iptables-safe/serverctl"
 	"iptables-safe/vos"
 
 	"github.com/gin-gonic/gin"
@@ -27,10 +29,12 @@ func UserLoginPage(c *gin.Context) {
 
 func UserLogin(c *gin.Context) {
 	clientIP := getClientIP(c)
-
-	// 验证客户端IP
 	if clientIP == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to determine client IP"})
+		return
+	}
+	if ip := net.ParseIP(clientIP); ip != nil && ip.IsLoopback() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Loopback IP cannot be whitelisted via login"})
 		return
 	}
 
@@ -38,7 +42,6 @@ func UserLogin(c *gin.Context) {
 	if err != nil {
 		log.Printf("Error checking failed attempts: %v", err)
 	}
-
 	if failedAttempts >= MaxFailedAttempts {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": "Too many failed attempts. Please try again later.",
@@ -49,7 +52,6 @@ func UserLogin(c *gin.Context) {
 	var req struct {
 		Password string `json:"password" binding:"required"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
@@ -62,14 +64,13 @@ func UserLogin(c *gin.Context) {
 		return
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(config.UserPassword), []byte(req.Password))
-	if err != nil {
-		database.RecordLoginAttempt(clientIP, false)
+	if err := bcrypt.CompareHashAndPassword([]byte(config.UserPassword), []byte(req.Password)); err != nil {
+		_ = database.RecordLoginAttempt(clientIP, false)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
 		return
 	}
 
-	database.RecordLoginAttempt(clientIP, true)
+	_ = database.RecordLoginAttempt(clientIP, true)
 
 	expiresAt := time.Now().Add(TempWhitelistDuration)
 	if err := database.AddWhitelistIP(clientIP, "User login", false, expiresAt); err != nil {
@@ -77,16 +78,12 @@ func UserLogin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to whitelist IP"})
 		return
 	}
-
 	if err := iptables.AddIPToWhitelist(clientIP); err != nil {
 		log.Printf("Error adding IP to iptables: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update firewall"})
 		return
 	}
-
-	if err := iptables.SaveRules(); err != nil {
-		log.Printf("Error saving iptables rules: %v", err)
-	}
+	_ = iptables.SaveRules()
 
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Access granted. Your IP has been whitelisted for 24 hours.",
@@ -100,10 +97,26 @@ func AdminLoginPage(c *gin.Context) {
 }
 
 func AdminLogin(c *gin.Context) {
+	clientIP := getClientIP(c)
+	if clientIP == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unable to determine client IP"})
+		return
+	}
+
+	failedAttempts, err := database.GetRecentFailedAttempts("admin:"+clientIP, LockoutDuration)
+	if err != nil {
+		log.Printf("Error checking admin failed attempts: %v", err)
+	}
+	if failedAttempts >= MaxFailedAttempts {
+		c.JSON(http.StatusTooManyRequests, gin.H{
+			"error": "Too many failed attempts. Please try again later.",
+		})
+		return
+	}
+
 	var req struct {
 		Password string `json:"password" binding:"required"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
@@ -116,15 +129,33 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
-	err = bcrypt.CompareHashAndPassword([]byte(config.AdminPassword), []byte(req.Password))
-	if err != nil {
+	if err := bcrypt.CompareHashAndPassword([]byte(config.AdminPassword), []byte(req.Password)); err != nil {
+		_ = database.RecordLoginAttempt("admin:"+clientIP, false)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
 		return
 	}
 
-	token := generateToken()
-	c.SetCookie("admin_token", token, 3600, "/", "", false, true)
+	_ = database.RecordLoginAttempt("admin:"+clientIP, true)
+
+	token, err := createAdminSession(clientIP)
+	if err != nil {
+		log.Printf("Error creating admin session: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie(AdminCookieName, token, int(AdminSessionTTL.Seconds()), "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"message": "Login successful"})
+}
+
+func AdminLogout(c *gin.Context) {
+	token, _ := c.Cookie(AdminCookieName)
+	if token != "" {
+		revokeAdminSession(token)
+	}
+	c.SetCookie(AdminCookieName, "", -1, "/", "", false, true)
+	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
 }
 
 func AdminDashboard(c *gin.Context) {
@@ -138,13 +169,10 @@ func GetWhitelistIPs(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get whitelist"})
 		return
 	}
-
-	// 检查每个IP的规则状态
 	for i := range ips {
 		ips[i].InputRuleExists = iptables.CheckIPInputRule(ips[i].IP)
 		ips[i].OutputRuleExists = iptables.CheckIPOutputRule(ips[i].IP)
 	}
-
 	c.JSON(http.StatusOK, ips)
 }
 
@@ -154,9 +182,13 @@ func AddWhitelistIP(c *gin.Context) {
 		Description string `json:"description"`
 		IsPermanent bool   `json:"is_permanent"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	req.IP = strings.TrimSpace(req.IP)
+	if net.ParseIP(req.IP) == nil || req.IP == "0.0.0.0" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid IP address"})
 		return
 	}
 
@@ -164,29 +196,22 @@ func AddWhitelistIP(c *gin.Context) {
 	if !req.IsPermanent {
 		expiresAt = time.Now().Add(TempWhitelistDuration)
 	}
-
 	if err := database.AddWhitelistIP(req.IP, req.Description, req.IsPermanent, expiresAt); err != nil {
 		log.Printf("Error adding IP to database: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add IP"})
 		return
 	}
-
 	if err := iptables.AddIPToWhitelist(req.IP); err != nil {
 		log.Printf("Error adding IP to iptables: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update firewall"})
 		return
 	}
-
-	if err := iptables.SaveRules(); err != nil {
-		log.Printf("Error saving iptables rules: %v", err)
-	}
-
+	_ = iptables.SaveRules()
 	c.JSON(http.StatusOK, gin.H{"message": "IP added successfully"})
 }
 
 func DeleteWhitelistIP(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid ID"})
 		return
@@ -205,7 +230,6 @@ func DeleteWhitelistIP(c *gin.Context) {
 			break
 		}
 	}
-
 	if targetIP == "" {
 		c.JSON(http.StatusNotFound, gin.H{"error": "IP not found"})
 		return
@@ -216,15 +240,8 @@ func DeleteWhitelistIP(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete IP"})
 		return
 	}
-
-	if err := iptables.RemoveIPFromWhitelist(targetIP); err != nil {
-		log.Printf("Error removing IP from iptables: %v", err)
-	}
-
-	if err := iptables.SaveRules(); err != nil {
-		log.Printf("Error saving iptables rules: %v", err)
-	}
-
+	_ = iptables.RemoveIPFromWhitelist(targetIP)
+	_ = iptables.SaveRules()
 	c.JSON(http.StatusOK, gin.H{"message": "IP deleted successfully"})
 }
 
@@ -232,18 +249,19 @@ func UpdateUserPassword(c *gin.Context) {
 	var req struct {
 		NewPassword string `json:"new_password" binding:"required"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
-
+	if len(req.NewPassword) < MinPasswordLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password too short (min 6)"})
+		return
+	}
 	if err := database.UpdateUserPassword(req.NewPassword); err != nil {
 		log.Printf("Error updating user password: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"message": "User password updated successfully"})
 }
 
@@ -251,26 +269,97 @@ func UpdateAdminPassword(c *gin.Context) {
 	var req struct {
 		NewPassword string `json:"new_password" binding:"required"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
-
+	if len(req.NewPassword) < MinPasswordLength {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password too short (min 6)"})
+		return
+	}
 	if err := database.UpdateAdminPassword(req.NewPassword); err != nil {
 		log.Printf("Error updating admin password: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update password"})
 		return
 	}
-
+	revokeAllAdminSessions()
+	c.SetCookie(AdminCookieName, "", -1, "/", "", false, true)
 	c.JSON(http.StatusOK, gin.H{"message": "Admin password updated successfully"})
+}
+
+func GetListenPort(c *gin.Context) {
+	port, err := database.GetListenPort()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get port"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"port": port})
+}
+
+func UpdateListenPort(c *gin.Context) {
+	var req struct {
+		Port int `json:"port" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		return
+	}
+	if req.Port < 1 || req.Port > 65535 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Port must be 1-65535"})
+		return
+	}
+	if req.Port == 22 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Port 22 is reserved"})
+		return
+	}
+
+	oldPort, err := database.GetListenPort()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get current port"})
+		return
+	}
+	if oldPort == req.Port {
+		c.JSON(http.StatusOK, gin.H{"message": "Port unchanged", "port": req.Port})
+		return
+	}
+
+	if err := database.UpdateListenPort(req.Port); err != nil {
+		log.Printf("Error updating listen port in DB: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save port"})
+		return
+	}
+
+	if err := iptables.UpdateAuthPort(oldPort, req.Port); err != nil {
+		log.Printf("Error updating firewall auth port: %v", err)
+		_ = database.UpdateListenPort(oldPort)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update firewall port"})
+		return
+	}
+	_ = iptables.SaveRules()
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":  "Port updated, server reloading",
+		"old_port": oldPort,
+		"port":     req.Port,
+	})
+
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		if err := serverctl.Reload(req.Port); err != nil {
+			log.Printf("Failed to reload HTTP server on :%d: %v", req.Port, err)
+		}
+	}()
 }
 
 func AdminAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		token, err := c.Cookie("admin_token")
-		if err != nil || token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		token, err := c.Cookie(AdminCookieName)
+		if err != nil || !validateAdminSession(token) {
+			if strings.HasPrefix(c.Request.URL.Path, "/api/") {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+			} else {
+				c.Redirect(http.StatusFound, "/admin")
+			}
 			c.Abort()
 			return
 		}
@@ -278,52 +367,37 @@ func AdminAuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+// getClientIP 仅信任直连 RemoteAddr，防止 X-Forwarded-For / X-Real-IP 伪造白名单。
 func getClientIP(c *gin.Context) string {
-	ip := c.GetHeader("X-Real-IP")
-	if ip == "" {
-		ip = c.GetHeader("X-Forwarded-For")
-		if ip != "" {
-			ips := strings.Split(ip, ",")
-			ip = strings.TrimSpace(ips[0])
-		}
+	ip := c.Request.RemoteAddr
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
 	}
-	if ip == "" {
-		ip = c.ClientIP()
-	}
+	ip = strings.Trim(ip, "[]")
 
-	// 过滤掉无效IP
-	if ip == "" || ip == "0.0.0.0" || ip == "::1" || strings.HasPrefix(ip, "::") {
-		log.Printf("Warning: Invalid client IP detected: %s", ip)
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsUnspecified() {
+		log.Printf("Warning: Invalid client IP: %s", ip)
 		return ""
 	}
-
-	return ip
-}
-
-func generateToken() string {
-	return strconv.FormatInt(time.Now().UnixNano(), 36)
+	if v4 := parsed.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ""
 }
 
 func GetVOSConfig(c *gin.Context) {
 	enabled, err := database.GetVOSSyncEnabled()
 	if err != nil {
-		log.Printf("Error getting VOS sync enabled: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get config"})
 		return
 	}
-
 	interval, err := database.GetVOSSyncInterval()
 	if err != nil {
-		log.Printf("Error getting VOS sync interval: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get config"})
 		return
 	}
-
-	lastSync, err := database.GetVOSLastSync()
-	if err != nil {
-		log.Printf("Error getting VOS last sync: %v", err)
-	}
-
+	lastSync, _ := database.GetVOSLastSync()
 	c.JSON(http.StatusOK, gin.H{
 		"enabled":   enabled,
 		"interval":  interval,
@@ -336,34 +410,26 @@ func UpdateVOSConfig(c *gin.Context) {
 		Enabled  bool `json:"enabled"`
 		Interval int  `json:"interval" binding:"required,min=1"`
 	}
-
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 		return
 	}
-
 	if err := database.UpdateVOSSyncConfig(req.Enabled, req.Interval); err != nil {
-		log.Printf("Error updating VOS config: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update config"})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{"message": "VOS config updated successfully"})
 }
 
 func ManualVOSSync(c *gin.Context) {
-	log.Println("Manual VOS sync triggered by admin")
-
 	result, err := vos.ManualSync()
 	if err != nil {
-		log.Printf("Error during manual VOS sync: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error":   "Sync failed",
 			"details": err.Error(),
 		})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"message":    "Sync completed successfully",
 		"total_ips":  result.TotalIPs,
@@ -380,18 +446,15 @@ func GetVOSStatus(c *gin.Context) {
 
 	ips, err := database.GetAllWhitelistIPs()
 	if err != nil {
-		log.Printf("Error getting whitelist IPs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get status"})
 		return
 	}
-
 	vosIPCount := 0
 	for _, ip := range ips {
 		if strings.HasPrefix(ip.Description, "VOS-") {
 			vosIPCount++
 		}
 	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"enabled":      enabled,
 		"interval":     interval,
